@@ -3,8 +3,11 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:http/http.dart' as http;
+import 'package:http_parser/http_parser.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flex_color_picker/flex_color_picker.dart';
+import 'package:loading_progress/loading_progress.dart';
+import 'package:intl/intl.dart';
 
 void main() {
   runApp(const MyApp());
@@ -41,43 +44,41 @@ class _NavigationState extends State<Navigation> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-        title: Text(widget.title),
-      ),
-      bottomNavigationBar: NavigationBar(
-        onDestinationSelected: (int index) {
-          setState(() {
-            currentPageIndex = index;
-          });
-        },
-        indicatorColor: Colors.amber[800],
-        selectedIndex: currentPageIndex,
-        destinations: const <Widget>[
-          NavigationDestination(
-            icon: Icon(Icons.home),
-            label: '首頁',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.history),
-            label: '歷史紀錄',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.settings),
-            label: '設定',
-          ),
-        ],
-      ),
-      body: <Widget>[
-        const HomePage(),
-        Container(
-          color: Colors.green,
-          alignment: Alignment.center,
-          child: const Text('Page 2'),
+        appBar: AppBar(
+          backgroundColor: Theme.of(context).colorScheme.inversePrimary,
+          title: Text(widget.title),
         ),
-        const SettingPage(),
-      ][currentPageIndex],
-    );
+        bottomNavigationBar: NavigationBar(
+          onDestinationSelected: (int index) {
+            setState(() {
+              currentPageIndex = index;
+            });
+          },
+          indicatorColor: Colors.amber[800],
+          selectedIndex: currentPageIndex,
+          destinations: const <Widget>[
+            NavigationDestination(
+              icon: Icon(Icons.home),
+              label: '首頁',
+            ),
+            NavigationDestination(
+              icon: Icon(Icons.history),
+              label: '歷史紀錄',
+            ),
+            NavigationDestination(
+              icon: Icon(Icons.settings),
+              label: '設定',
+            ),
+          ],
+        ),
+        body: IndexedStack(
+          index: currentPageIndex,
+          children: const <Widget>[
+            HomePage(),
+            HistoryPage(),
+            SettingPage(),
+          ],
+        ));
   }
 }
 
@@ -110,6 +111,7 @@ class _HomePageState extends State<HomePage> {
     ColorTools.createPrimarySwatch(guideErrorDark): 'Guide Error Dark',
     ColorTools.createPrimarySwatch(blueBlues): 'Blue blues',
   };
+  bool isUploadRunning = false;
 
   Future<bool> colorPickerDialog() async {
     return ColorPicker(
@@ -195,6 +197,65 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
+  Widget _UploadButton() {
+    return FilledButton(
+        onPressed: isUploadRunning
+            ? null
+            : () async {
+                final prefs = await SharedPreferences.getInstance();
+                String history = prefs.getString('history') ?? "";
+                if (history == "") {
+                  history = "[]";
+                }
+                List<dynamic> history_arr = jsonDecode(history);
+                String server = prefs.getString("server") ?? "";
+                if (server == "") {
+                  return;
+                }
+                server = "$server/upload";
+                setState(() => isUploadRunning = true);
+                LoadingProgress.start(context);
+                //print('isUploadRunning: ' + isUploadRunning.toString());
+                var request = http.MultipartRequest('POST', Uri.parse(server));
+                request.fields['user_id'] = '1'; // FIXME
+                request.fields['color'] = pickcolor.hex;
+                for (XFile f in pickedFileList) {
+                  print(f.name);
+                  request.files.add(http.MultipartFile.fromBytes(
+                      'file', File(f.path).readAsBytesSync(),
+                      filename: f.name,
+                      contentType: MediaType('image', 'jpeg')));
+                }
+                final response = await request.send();
+                setState(() => isUploadRunning = false);
+                LoadingProgress.stop(context);
+                //print('isUploadRunning: ' + isUploadRunning.toString());
+                var message = "";
+                if (response.statusCode == 200) {
+                  var resp = await http.Response.fromStream(response);
+                  var resp_json = json.decode(resp.body);
+                  message =
+                      '成功! 最佳的圖片為「${resp_json[0]['result']}」，詳細結果可至歷史紀錄頁面確認';
+                  DateTime now = DateTime.now();
+                  String formattedDate =
+                      DateFormat('yyyy-MM-dd kk:mm').format(now);
+                  history_arr.insert(0, 
+                      "{\"time\": \"$formattedDate\", \"color\": \"${pickcolor.hex}\", \"photo\": ${resp_json[0]['result']}}");
+                  print("Saving: ${jsonEncode(history_arr)}");
+                  prefs.setString('history', jsonEncode(history_arr));
+                } else {
+                  message = '發生錯誤，伺服器回傳: ${response.statusCode}';
+                }
+                //print(response.statusCode);
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(message),
+                  ),
+                );
+              },
+        child: isUploadRunning ? const Text('上傳中') : const Text('上傳'));
+  }
+
   @override
   Widget build(BuildContext context) {
     return Center(
@@ -248,32 +309,69 @@ class _HomePageState extends State<HomePage> {
             padding: const EdgeInsets.all(16.0),
             child: SizedBox(
               width: double.infinity,
-              child: FilledButton(
-                  onPressed: () async {
-                    final prefs = await SharedPreferences.getInstance();
-                    String server = prefs.getString("server") ?? "";
-                    if (server == "") {
-                      return;
-                    }
-                    var data = <String, String>{'color': pickcolor.hex};
-                    for (XFile f in pickedFileList) {
-                      var f_data = <String, String>{
-                        f.name: base64Encode(File(f.path).readAsBytesSync())
-                      };
-                      data.addAll(f_data);
-                    }
-                    final response = await http.post(
-                      Uri.parse(server),
-                      headers: <String, String>{
-                        'Content-Type': 'application/json; charset=UTF-8',
-                      },
-                      body: jsonEncode(data),
-                    );
-                    print(response.statusCode);
-                  },
-                  child: const Text('上傳')),
+              child: _UploadButton(),
             ))
       ],
+    ));
+  }
+}
+
+class HistoryPage extends StatefulWidget {
+  const HistoryPage({super.key});
+
+  @override
+  State<HistoryPage> createState() => _HistoryPageState();
+}
+
+class _HistoryPageState extends State<HistoryPage> {
+  Future<String> getPreferenceData() async {
+    SharedPreferences pref = await SharedPreferences.getInstance();
+    return pref.getString("history") ?? "[]";
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder(
+        future: getPreferenceData(),
+        builder: (BuildContext context, AsyncSnapshot<String> snapshot) {
+          if (snapshot.hasData) {
+            var arr = <Widget>[];
+            arr.add(FilledButton(
+                onPressed: () => setState(() {}), child: const Text("重新整理")));
+            var data = jsonDecode(snapshot.data ?? "[{}]");
+            print("The decode data is $data");
+            for (var result in data) {
+              print("Now result is $result");
+              var images = <Widget>[];
+              var result_json = jsonDecode(result);
+              for (var imgpath in result_json["photo"]) {
+                images.add(buildImage(imgpath));
+              }
+              arr.add(Card(
+                child: Column(
+                  children: <Widget>[
+                    Text(
+                        "上傳時間: ${result_json['time']}    顏色編號: ${result_json['color']}    結果: 共${result_json['photo'].length}張"),
+                    Row(
+                      children: images,
+                    ),
+                  ],
+                ),
+              ));
+            }
+            return ListView(children: arr);
+          } else {
+            return CircularProgressIndicator();
+          }
+        });
+  }
+
+  Widget buildImage(filename) {
+    return Expanded(
+        child: SizedBox(
+      height: 200,
+      child: Image.network(
+          'https://5147-2401-e180-8820-3a4c-a198-1bd2-926e-ef17.ngrok-free.app/picture?filename=$filename'),
     ));
   }
 }
