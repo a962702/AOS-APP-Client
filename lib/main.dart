@@ -112,6 +112,11 @@ class _HomePageState extends State<HomePage> {
     ColorTools.createPrimarySwatch(blueBlues): 'Blue blues',
   };
   bool isUploadRunning = false;
+  List<String> DropdownLabel = ["冷色系", "暖色系", "灰階", "自訂顏色"];
+  List<String> DropdownValue = ["cool", "warm", "gray", "custom"];
+  String SelectedDropdownLabel = "冷色系";
+  String SelectedDropdownValue = "cool";
+  String commit = "";
 
   Future<bool> colorPickerDialog() async {
     return ColorPicker(
@@ -217,8 +222,17 @@ class _HomePageState extends State<HomePage> {
                 LoadingProgress.start(context);
                 //print('isUploadRunning: ' + isUploadRunning.toString());
                 var request = http.MultipartRequest('POST', Uri.parse(server));
+                String color = "";
+                String color_str = "";
+                if (SelectedDropdownValue == "custom") {
+                  color = pickcolor.hex;
+                  color_str = "#${pickcolor.hex}";
+                } else {
+                  color = SelectedDropdownValue;
+                  color_str = SelectedDropdownLabel;
+                }
                 request.fields['user_id'] = '1'; // FIXME
-                request.fields['color'] = pickcolor.hex;
+                request.fields['color'] = color;
                 for (XFile f in pickedFileList) {
                   print(f.name);
                   request.files.add(http.MultipartFile.fromBytes(
@@ -239,8 +253,9 @@ class _HomePageState extends State<HomePage> {
                   DateTime now = DateTime.now();
                   String formattedDate =
                       DateFormat('yyyy-MM-dd kk:mm').format(now);
-                  history_arr.insert(0, 
-                      "{\"time\": \"$formattedDate\", \"color\": \"${pickcolor.hex}\", \"photo\": ${resp_json[0]['result']}}");
+
+                  history_arr.insert(0,
+                      "{\"time\": \"$formattedDate\", \"color\": \"$color_str\", \"photo\": ${resp_json[0]['result']}, \"commit\": \"$commit\"}");
                   print("Saving: ${jsonEncode(history_arr)}");
                   prefs.setString('history', jsonEncode(history_arr));
                 } else {
@@ -254,6 +269,43 @@ class _HomePageState extends State<HomePage> {
                 );
               },
         child: isUploadRunning ? const Text('上傳中') : const Text('上傳'));
+  }
+
+  List<DropdownMenuEntry<String>> DropdownMenuentries() {
+    var entries = <DropdownMenuEntry<String>>[];
+    entries.add(const DropdownMenuEntry(value: "cool", label: "冷色系"));
+    entries.add(const DropdownMenuEntry(value: "warm", label: "暖色系"));
+    entries.add(const DropdownMenuEntry(value: "gray", label: "灰階"));
+    entries.add(const DropdownMenuEntry(value: "custom", label: "自訂顏色"));
+    return entries;
+  }
+
+  Widget build_color_picker() {
+    if (SelectedDropdownValue == "custom") {
+    return ListTile(
+          title: const Text('請選擇目標顏色'),
+          subtitle: Text('目前已選擇 '
+              '${ColorTools.materialNameAndCode(pickcolor, colorSwatchNameMap: colorsNameMap)}'),
+          trailing: ColorIndicator(
+            width: 44,
+            height: 44,
+            borderRadius: 4,
+            color: pickcolor,
+            onSelectFocus: false,
+            onSelect: () async {
+              final Color colorBeforeDialog = pickcolor;
+              if (!(await colorPickerDialog())) {
+                setState(() {
+                  pickcolor = colorBeforeDialog;
+                });
+              }
+            },
+          ),
+        );
+    }
+    else {
+      return const Text("");
+    }
   }
 
   @override
@@ -275,36 +327,35 @@ class _HomePageState extends State<HomePage> {
                   child: const Text('選擇照片')),
             )),
         _previewimages(),
-        const Padding(
-            padding: EdgeInsets.all(16.0),
+        Padding(
+            padding: const EdgeInsets.all(16.0),
             child: SizedBox(
               child: TextField(
-                decoration: InputDecoration(
-                  border: OutlineInputBorder(),
-                  labelText: '輸入備註',
-                ),
-              ),
+                  decoration: const InputDecoration(
+                    border: OutlineInputBorder(),
+                    labelText: '輸入備註',
+                  ),
+                  onChanged: (String str) {
+                    setState(() {
+                      commit = str;
+                    });
+                  }),
             )),
-        ListTile(
-          title: const Text('請選擇目標顏色'),
-          subtitle: Text('目前已選擇 '
-              '${ColorTools.materialNameAndCode(pickcolor, colorSwatchNameMap: colorsNameMap)}'),
-          trailing: ColorIndicator(
-            width: 44,
-            height: 44,
-            borderRadius: 4,
-            color: pickcolor,
-            onSelectFocus: false,
-            onSelect: () async {
-              final Color colorBeforeDialog = pickcolor;
-              if (!(await colorPickerDialog())) {
+        Padding(
+            padding: const EdgeInsets.all(16.0),
+            child: SizedBox(
+                child: DropdownMenu<String>(
+              initialSelection: "冷色系",
+              onSelected: (String? value) {
                 setState(() {
-                  pickcolor = colorBeforeDialog;
+                  SelectedDropdownValue = value ?? "cool";
+                  SelectedDropdownLabel = DropdownLabel[
+                      DropdownValue.indexOf(SelectedDropdownValue)];
                 });
-              }
-            },
-          ),
-        ),
+              },
+              dropdownMenuEntries: DropdownMenuentries(),
+            ))),
+        build_color_picker(),
         Padding(
             padding: const EdgeInsets.all(16.0),
             child: SizedBox(
@@ -324,44 +375,61 @@ class HistoryPage extends StatefulWidget {
 }
 
 class _HistoryPageState extends State<HistoryPage> {
-  Future<String> getPreferenceData() async {
+  Future<String> getPreferenceHistoryData() async {
     SharedPreferences pref = await SharedPreferences.getInstance();
     return pref.getString("history") ?? "[]";
+  }
+
+  Future<String> getPreferenceServerData() async {
+    SharedPreferences pref = await SharedPreferences.getInstance();
+    return pref.getString("server") ?? "";
   }
 
   @override
   Widget build(BuildContext context) {
     return FutureBuilder(
-        future: getPreferenceData(),
-        builder: (BuildContext context, AsyncSnapshot<String> snapshot) {
-          if (snapshot.hasData) {
-            var arr = <Widget>[];
-            arr.add(FilledButton(
-                onPressed: () => setState(() {}), child: const Text("重新整理")));
-            var data = jsonDecode(snapshot.data ?? "[{}]");
-            print("The decode data is $data");
-            for (var result in data) {
-              print("Now result is $result");
-              var images = <Widget>[];
-              var result_json = jsonDecode(result);
-              for (var imgpath in result_json["photo"]) {
-                images.add(buildImage(imgpath));
-              }
-              arr.add(Card(
-                child: Column(
-                  children: <Widget>[
-                    Text(
-                        "上傳時間: ${result_json['time']}    顏色編號: ${result_json['color']}    結果: 共${result_json['photo'].length}張"),
-                    Row(
-                      children: images,
-                    ),
-                  ],
-                ),
-              ));
-            }
-            return ListView(children: arr);
+        future: getPreferenceHistoryData(),
+        builder: (BuildContext context, AsyncSnapshot<String> Historysnapshot) {
+          if (Historysnapshot.hasData) {
+            return FutureBuilder(
+                future: getPreferenceServerData(),
+                builder: (BuildContext context,
+                    AsyncSnapshot<String> Serversnapshot) {
+                  if (Serversnapshot.hasData) {
+                    var arr = <Widget>[];
+                    arr.add(FilledButton(
+                        onPressed: () => setState(() {}),
+                        child: const Text("重新整理")));
+                    var data = jsonDecode(Historysnapshot.data ?? "[{}]");
+                    var server = Serversnapshot.data;
+                    print("The decode data is $data");
+                    for (var result in data) {
+                      print("Now result is $result");
+                      var images = <Widget>[];
+                      var result_json = jsonDecode(result);
+                      for (var imgpath in result_json["photo"]) {
+                        images.add(
+                            buildImage("$server/picture?filename=$imgpath"));
+                      }
+                      arr.add(Card(
+                        child: Column(
+                          children: <Widget>[
+                            Text(
+                                "上傳時間: ${result_json['time']}    選擇顏色: ${result_json['color']}\n結果: 共${result_json['photo'].length}張    備註: ${result_json['commit']}"),
+                            Row(
+                              children: images,
+                            ),
+                          ],
+                        ),
+                      ));
+                    }
+                    return ListView(children: arr);
+                  } else {
+                    return const CircularProgressIndicator();
+                  }
+                });
           } else {
-            return CircularProgressIndicator();
+            return const CircularProgressIndicator();
           }
         });
   }
@@ -370,8 +438,7 @@ class _HistoryPageState extends State<HistoryPage> {
     return Expanded(
         child: SizedBox(
       height: 200,
-      child: Image.network(
-          'https://5147-2401-e180-8820-3a4c-a198-1bd2-926e-ef17.ngrok-free.app/picture?filename=$filename'),
+      child: Image.network('$filename'),
     ));
   }
 }
